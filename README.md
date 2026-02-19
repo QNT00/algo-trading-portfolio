@@ -11,7 +11,7 @@ A live-trading cryptocurrency futures system I built around **market regime clas
 ## Background
 
 This project started from a failed attempt at price prediction.
-The VBO strategy itself works successfully, and we have confirmed some profit, but we want to further advance the strategy and leap into the realm of precise quantities
+The VBO strategy itself works successfully, and I have confirmed some profit, but I want to further advance the strategy and leap into the realm of precise quantities
 
 Before this system, I spent several months building a full ML pipeline — 72-feature extraction (including physics-inspired metrics like price velocity, acceleration, and entropy), Triple Barrier labeling from Lopez de Prado's *AFML*, LSTM + Attention trained on 7GB+ of data via memory-mapped arrays, XGBoost per-coin ensembles, and a Streamlit dashboard with real-time inference. The stack was technically complete.
 
@@ -29,26 +29,26 @@ Most retail bots apply a fixed strategy regardless of market conditions. This sy
 
 ```mermaid
 graph TD
-    A[Market Data\nBybit API · 5m candles] --> B[Indicator Cache\nATR · RSI · MACD · BB · EMA]
-    B --> C[Market Analyzer\nML Regime Classifier]
+    A[Market Data<br/>Bybit API · 5m candles] --> B[Indicator Cache<br/>ATR · RSI · MACD · BB · EMA]
+    B --> C[Market Analyzer<br/>ML Regime Classifier]
 
     C -->|Regime Label| D{Signal Generator}
-    D -->|Confidence Score| E[Risk Manager\nRL Agent · ATR sizing]
+    D -->|Confidence Score| E[Risk Manager<br/>RL Agent · ATR sizing]
 
-    E -->|Position Parameters| F{Entry Filter\nConfidence threshold\nRegime adjustment\nSlot availability}
+    E -->|Position Parameters| F{Entry Filter<br/>Confidence threshold<br/>Regime adjustment<br/>Slot availability}
 
-    F -->|Approved| G[Execution Engine\nBybit ccxt]
-    G --> H[Order Management\nEntry · SL · TP · Trailing Stop]
-    H --> I[Position Monitor\nSync · Exit detection · PnL logging]
+    F -->|Approved| G[Execution Engine<br/>Bybit ccxt]
+    G --> H[Order Management<br/>Entry · SL · TP · Trailing Stop]
+    H --> I[Position Monitor<br/>Sync · Exit detection · PnL logging]
 
-    I -->|Trade result| J[RL Environment\nReward feedback]
+    I -->|Trade result| J[RL Environment<br/>Reward feedback]
     J -->|Updated weights| E
 
     subgraph Strategies ["Three Strategy Engines"]
         direction LR
-        S1[Aggressive\nHigh-freq · Futures]
-        S2[Adaptive\nML-weighted · Dynamic]
-        S3[Trend Following\nMulti-timeframe]
+        S1[Aggressive<br/>High-freq · Futures]
+        S2[Adaptive<br/>ML-weighted · Dynamic]
+        S3[Trend Following<br/>Multi-timeframe]
     end
 
     C --> Strategies

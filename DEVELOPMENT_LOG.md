@@ -166,6 +166,33 @@ EN:
 
 ---
 
+## 2026-02-18: 시스템 파라미터 조정
+## 2026-02-18: System Parameter Tuning
+
+### 변경 내용 / Changes
+
+KO:
+- 확신도 임계값 상향 (저품질 신호 필터링 강화)
+- 트레일링 스탑 거리 조정 (포지션 여유 확보 — 실제 dead parameter였음, 추후 정리 필요)
+- 스캔 주기 연장: 30초 → 60초 (중복 진입 시도 감소)
+
+EN:
+- Confidence threshold raised (stronger filtering of low-quality signals)
+- Trailing stop distance adjusted (give positions more room — later confirmed dead parameter, cleanup needed)
+- Scan interval extended: 30s → 60s (reduce duplicate entry attempts during open positions)
+
+### 이유 / Rationale
+
+KO:
+- 기존 임계값에서 기준치를 겨우 넘긴 신호들이 손실 기여 비중 높음
+- 30초 스캔은 포지션 보유 중 중복 시도로 "잔고 부족" 에러 빈발
+
+EN:
+- Signals just above the previous threshold were disproportionately contributing to losses.
+- 30-second scan interval caused duplicate entry attempts while positions were open, generating frequent "insufficient balance" errors.
+
+---
+
 ## 2026-02-05 ~ 2026-02-09: AdaptiveTradingSystem 개발 완료 및 멀티봇 충돌 해결
 ## 2026-02-05 ~ 2026-02-09: AdaptiveTradingSystem Completion & Multi-Bot Conflict Resolution
 
@@ -463,33 +490,6 @@ EN:
 2. **Limits of Triple Barrier labeling**: Even applying Lopez de Prado's methodology, out-of-sample performance failed to match in-sample. Sophisticated labeling doesn't compensate for a weak underlying signal.
 3. **The core question in financial ML**: *What* to predict matters more than *how* to predict. Changing the prediction target from price direction to market regime restructured the entire architecture.
 4. **Engineering foundation carried forward**: The data pipeline, feature engine, memory-mapped training, and live inference bridge designs directly informed the infrastructure of the current system.
-
----
-
-## 2026-02-18: 시스템 파라미터 조정
-## 2026-02-18: System Parameter Tuning
-
-### 변경 내용 / Changes
-
-KO:
-- 확신도 임계값 상향 (저품질 신호 필터링 강화)
-- 트레일링 스탑 거리 조정 (포지션 여유 확보 — 실제 dead parameter였음, 추후 정리 필요)
-- 스캔 주기 연장: 30초 → 60초 (중복 진입 시도 감소)
-
-EN:
-- Confidence threshold raised (stronger filtering of low-quality signals)
-- Trailing stop distance adjusted (give positions more room — later confirmed dead parameter, cleanup needed)
-- Scan interval extended: 30s → 60s (reduce duplicate entry attempts during open positions)
-
-### 이유 / Rationale
-
-KO:
-- 기존 임계값에서 기준치를 겨우 넘긴 신호들이 손실 기여 비중 높음
-- 30초 스캔은 포지션 보유 중 중복 시도로 "잔고 부족" 에러 빈발
-
-EN:
-- Signals just above the previous threshold were disproportionately contributing to losses.
-- 30-second scan interval caused duplicate entry attempts while positions were open, generating frequent "insufficient balance" errors.
 
 ---
 
