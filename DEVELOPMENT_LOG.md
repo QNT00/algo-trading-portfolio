@@ -3,12 +3,8 @@
 
 > **목적 (Purpose)**
 > KO: 시스템 개발 과정에서 발생한 문제, 의사결정, 해결 방법을 기록.
-> 퀀트 포트폴리오/대학원 지원 시 "사고 과정"을 보여주는 핵심 문서.
 >
 > EN: Documents problems, decisions, and solutions encountered during system development.
-> Core document demonstrating "engineering thought process" for quant portfolios and grad school applications.
->
-> **GitHub 이동 시 (On GitHub upload)**: 레포 루트에 이 파일을 배치 / Place this file at the repo root.
 
 ---
 
