@@ -8,6 +8,85 @@
 
 ---
 
+## 2026-02-22: AdaptiveTradingSystem V2 통합 — 하이브리드 인공지능 트레이딩 봇 구축
+## 2026-02-22: AdaptiveTradingSystem V2 Integration — Hybrid AI Trading Bot Architecture
+
+### 배경 (Background)
+
+KO:
+V1(Rule-based 시스템)의 잦은 휩쏘(Whipsaw)로 인한 승률 하락과 레짐 판단의 모호성을 해결하기 위해,
+비정상적인 금융 시계열 데이터에 강건한 **강화학습 및 딥러닝 기반 V2 업그레이드**를 단행.
+
+EN:
+To resolve the degrading win rate caused by frequent whipsaws and ambiguous regime detection in V1 (Rule-based system),
+a major **Deep Learning & Reinforcement Learning (V2) upgrade** was executed, proving robust against non-stationary financial time series.
+
+---
+
+### 문제 1: 정적 임계값과 비정상성 편향 (Problem 1: Static Thresholds & Non-stationarity Bias)
+
+KO:
+**현상**: V1 모델에서 보조지표(RSI, MACD)의 고정된 임계값(예: RSI > 60)은 시장의 변동성이 바뀔 때마다 오작동을 일으킴.
+과거에 성공했던 임계값이 미래에도 통한다는 보장이 없는 전형적인 '비정상성(Non-stationarity)' 한계 노출.
+
+EN:
+**Symptom**: In the V1 model, static thresholds for technical indicators (e.g., RSI > 60) failed whenever market volatility regimes shifted.
+This exposed the classic 'Non-stationarity' limitation—past successful thresholds do not guarantee future performance.
+
+---
+
+### 문제 2: 다차원 리스크 관리 부재 (Problem 2: Lack of Multi-dimensional Risk Management)
+
+KO:
+**현상**: 승률뿐만 아니라 진입 금액(Position Size), 레버리지(Leverage), 조기 청산 인내도(Exit Patience) 등을
+시장 상황에 따라 유기적으로 조절해야 함에도 불구하고, V1에서는 하드코딩된 비율로 단방향 관리만 됨.
+
+EN:
+**Symptom**: Market conditions require organic adjustment not only of entry direction but also Position Sizing, Leverage, and Exit Patience.
+V1 rigidly applied hardcoded ratios, creating a one-dimensional risk management bottleneck.
+
+---
+
+### 해결 방법: 하이브리드 V2 아키텍처 도입 (Solution: Hybrid V2 Architecture)
+
+KO:
+결정 단위를 3단계로 쪼개고 각각 최적의 AI 방법론을 적용한 통합 파이프라인(`train_all_v2.py`) 설계:
+
+1. **환경 분석**: HMM(Hidden Markov Model) 도입.
+   단순 가격 지표를 40여 개의 파생 변수(Hurst Exponent 등)로 확장하고, 비지도 학습(HMM)과 지도 학습(LightGBM)을 결합하여 현재를 넘어 **미래의 상태 전환 확률(Regime Transition Probability)**을 예측.
+2. **시그널 생성**: CNN 계열의 TCN(Temporal Convolutional Network) 도입.
+   과적합 방지를 위해 인과적 패딩(Causal Padding)을 적용하여 철저히 미래 데이터를 차단하고 확률 분포 기반(Softmax) 신뢰도(Confidence) 반환.
+3. **자금 관리**: 강력한 PPO(Proximal Policy Optimization) 심층 강화학습 에이전트 도입.
+   40차원의 시장 환경을 5차원의 행동 공간(매매 방향, 레버리지, 크기 등)으로 맵핑하여 Sortino Ratio 기반 보상 함수를 극대화하도록 자가 학습.
+4. **하방 호환성 (Fallback)**:
+   V2 딥러닝 컴포넌트 오류 시, 프로그램이 크래시(Crash)되지 않고 기존 안전한 V1(Rule-based) 엔진으로 우회하도록 마이크로서비스 관점의 구조적 안정성을 채택.
+
+EN:
+Divided the decision unit into 3 layers, applying optimal AI methodologies per layer, integrated via `train_all_v2.py`:
+
+1. **Environment Analysis**: Introduced HMM.
+   Expanded features to 40+ structural variables (e.g., Hurst Exponent). Combined Unsupervised (HMM) and Supervised (LightGBM) learning to predict the **Regime Transition Probability** rather than just identifying the current state.
+2. **Signal Generation**: Introduced TCN (Temporal Convolutional Network).
+   Applied Causal Padding strictly to prevent look-ahead bias, outputting probabilistic Confidence via Softmax.
+3. **Capital Management**: Introduced PPO Deep Reinforcement Learning Agent.
+   Mapped a 40-dimensional observation space to a 5-dimensional continuous action space (Direction, Leverage, Size, etc.), self-optimizing a Sortino Ratio-based reward function.
+4. **Backward Compatibility (Fallback)**:
+   Adopted a robust microservice-like architecture: if V2 deep learning components fail to load or error out, the system gracefully falls back to the reliable V1 (Rule-based) engine instead of crashing.
+
+---
+
+### 결과 및 배운 점 (Result & Learnings)
+
+KO:
+1. **과적합 통제의 중요성**: '수익이 나는 척'하는 코드를 짜는 것은 쉽지만, `rolling(raw=True)` 적용이나 교차피처 미래 참조를 원천 차단하는 구조를 세우는 과정이 V2 성패의 가장 큰 핵심이었음.
+2. **소프트웨어 공학적 설계 가치**: 단일 봇을 수학적으로 고도화하는 것을 넘어, 객체지향의 상속(Inheritance)과 폴백(Fallback) 패턴을 활용함으로써 시스템 운영 중에 AI 모델을 바꿔치기(Hot-swap)할 수 있는 무중단 시스템 베이스를 확보함.
+
+EN:
+1. **Controlling Overfitting is Everything**: Writing code that "looks profitable" is easy. Enforcing `rolling(raw=True)` and architecturally blocking look-ahead bias across cross-features was the true differentiator for V2's integrity.
+2. **Engineering Resiliency**: Beyond mathematical upgrades, utilizing Inheritance and Fallback patterns secured a zero-downtime foundation, natively allowing hot-swapped AI model weights during live operations.
+
+---
+
 ## 2026-02-21: AdaptiveTradingSystem 전략 재설계 — MomentumTrend v1 → ABT v2
 ## 2026-02-21: AdaptiveTradingSystem Strategy Overhaul — MomentumTrend v1 → ABT v2
 
