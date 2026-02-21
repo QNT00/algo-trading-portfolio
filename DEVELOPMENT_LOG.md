@@ -12,6 +12,150 @@
 
 ---
 
+## 2026-02-21: AdaptiveTradingSystem 전략 재설계 — MomentumTrend v1 → ABT v2
+## 2026-02-21: AdaptiveTradingSystem Strategy Overhaul — MomentumTrend v1 → ABT v2
+
+### 배경 (Background)
+
+KO:
+이전까지 Adaptive는 Trend+Pullback 전략(RSI>60=Long 류)을 사용했으나 평균 승률 24%로 실패 판정.
+원인 분석 후 **전략 로직 자체를 교체**하는 방향으로 진행.
+
+EN:
+The Adaptive system had been running a Trend+Pullback strategy (RSI-based momentum entry)
+but achieved only ~24% win rate. Root cause analysis concluded a fundamental logic flaw,
+leading to a complete strategy replacement.
+
+---
+
+### 문제 1: MomentumTrend v1 시도 및 실패 (Problem 1: MomentumTrend v1 Attempt)
+
+KO:
+**시도한 것**: Trend+Pullback 실패 후, 순수 추세 추종(MomentumTrend)으로 전환.
+- RSI/Stoch/BB 완전 제거 — 추세와 역방향 신호를 생성하던 원인
+- ADX Hard Gate 추가 — ADX 기준값 미달 시 즉시 NEUTRAL (횡보 자동 차단)
+- EMA 정렬 6봉(30분) 지속성 확인 — 즉각적 EMA 플립 방지
+
+**결과** (3구간 백테스트):
+
+| 기간 | 승률 | 손익비 | 수익률 |
+|------|-----|------|------|
+| 상승장 (6개월) | ~33% | ~1.6:1 | 대폭 손실 |
+| 하락장 (6개월) | ~30% | ~1.7:1 | 대폭 손실 |
+| 횡보 (2개월) | ~31% | ~1.6:1 | 손실 |
+
+**진전된 부분**: 손익비 > 1 (평균 수익 > 평균 손실) — 트레일링 스탑 버그 수정 효과
+**실패 원인**: 5분봉 EMA 기반 추세 추종 승률은 구조적으로 ~33% 상한 존재
+→ 필요 손익분기 승률(~39%)에 미달 → 파라미터 조정으로 해결 불가
+
+EN:
+**What was tried**: After Trend+Pullback failure, pivoted to pure momentum trend-following.
+- Removed RSI/Stoch/BB — these were generating signals counter to trend direction
+- Added ADX Hard Gate — below threshold, return NEUTRAL immediately (ranging market filter)
+- Required EMA alignment persistence across multiple bars — prevents entries on transient EMA flips
+
+**Results** (3-period backtest):
+
+| Period | WR | P/F | Return |
+|--------|-----|-----|--------|
+| Bull (6 months) | ~33% | ~1.6:1 | Large loss |
+| Bear (6 months) | ~30% | ~1.7:1 | Large loss |
+| Ranging (2 months) | ~31% | ~1.6:1 | Loss |
+
+**What improved**: Profit factor > 1 (avg win > avg loss) — trailing stop bug fix took effect
+**Failure reason**: 5-minute EMA-based trend following has a structural ~33% WR ceiling.
+Break-even WR needed (~39%) cannot be reached; no parameter adjustment can close this gap.
+
+---
+
+### 문제 2: 트레일링 스탑 Dead Parameter 버그 (Problem 2: Trailing Stop Dead Parameter)
+
+KO:
+`risk_manager.py`의 `update_trailing_stop()`에서 config로 주입된 `trailing_stop_distance`가
+실제 로직에 반영되지 않고 ATR 하드코딩 값만 사용되던 버그 발견.
+- 결과: 0~2% 수익 구간에서 스탑이 바짝 붙어 TP 전에 청산 → R:R 역전 현상
+- 수정: config 파라미터를 실제 로직에 반영, 초기 수익 구간에서 트레일링 없음으로 변경
+
+EN:
+Discovered a dead-parameter bug in `risk_manager.py`'s `update_trailing_stop()`:
+the config-injected `trailing_stop_distance` was loaded but never applied.
+Hardcoded ATR multipliers were used instead.
+- Effect: stop loss hugged the position at 0–2% profit, triggering before TP → R:R inversion
+- Fix: wired config parameter into actual logic; removed trailing in early profit phase
+
+---
+
+### 해결 방법: ABT v2 전략 채택 (Solution: ABT v2 Strategy)
+
+KO:
+**핵심 결정**: 5분봉 추세 추종의 구조적 한계를 인정하고 전략 자체를 교체.
+
+**새 전략**: ABT (Adaptive Breakout-Trend)
+- 타임프레임: 5분봉 → **15분봉** (노이즈 대 신호 비율 개선)
+- 진입 구조: **3-Layer 필터**
+  - Layer 1: 환경 필터 (ADX, 볼린저밴드 폭, 거래량 — 레짐 분류기 독립)
+  - Layer 2: EMA/DI 방향 판단 (필터 역할만, 진입 타이밍 아님)
+  - Layer 3: VBO 돌파 + 눌림목 혼합 트리거
+- R:R 구조: 2.0:1 (이전보다 목표치 낮춤 → 손익분기 승률 33.3%로 하향)
+- 트레일링: Phase 0~3 (초기 수익 구간에서 트레일 없음 → R:R 보장)
+
+**VBO 참고 근거**: 이전 Trading Bot 프로젝트에서 VBO 전략 소규모 실거래 성공 경험 있음.
+단, 당시 완성형이 아니었으므로 아이디어만 참고하고 설계는 새로 수행.
+
+EN:
+**Core decision**: Acknowledged the structural WR ceiling of 5-min trend following.
+Replacing the strategy rather than tuning parameters.
+
+**New strategy**: ABT (Adaptive Breakout-Trend)
+- Timeframe: 5-minute → **15-minute** (better signal-to-noise ratio)
+- Entry structure: **3-Layer filter**
+  - Layer 1: Environment filter (ADX, Bollinger Band width, volume — replaces regime classifier)
+  - Layer 2: EMA/DI direction determination (filter only, not timing signal)
+  - Layer 3: VBO breakout + pullback combined trigger
+- R:R: 2.0:1 (lower target than before → break-even WR reduced to 33.3%)
+- Trailing: Phase 0–3 (no trailing in early profit phase → R:R protection)
+
+**VBO rationale**: Prior Trading Bot project demonstrated partial success with VBO strategy in small-scale live trading.
+Not production-ready at the time, but validated the core concept.
+
+---
+
+### 배운 것 (Learnings) / Learnings
+
+KO:
+1. **전략 교체 기준**: 파라미터 조정으로 해결할 수 없는 구조적 한계가 확인되면 전략 자체를 교체해야 함.
+   "어떤 숫자를 바꾸면 나아지지 않을까"라는 생각이 드는 순간이 교체 타이밍의 신호.
+
+2. **승률 vs 손익비의 균형**: 손익비 > 1 달성 자체는 의미 있지만 충분하지 않음.
+   손익분기 승률(= 1 / (1 + 손익비)) 이상의 승률이 반드시 필요.
+   예: 손익비 1.6:1 → 손익분기 승률 38.5% → 실제 승률 33%이면 손실.
+
+3. **타임프레임 선택의 중요성**: 동일한 전략 로직이라도 5분봉과 15분봉에서 신뢰도가 다름.
+   짧은 타임프레임일수록 노이즈가 많아 진입 신호가 빠르게 무효화될 수 있음.
+
+4. **3-Layer 구조의 가치**: 진입 조건을 "환경 필터 → 방향 판단 → 타이밍"으로 분리하면
+   각 계층이 독립적으로 책임을 지므로 어느 계층에서 문제가 발생하는지 분석이 쉬워짐.
+   단일 점수 합산 구조에서는 불가능한 투명성.
+
+EN:
+1. **When to replace vs. tune**: When a structural ceiling is confirmed and no parameter change
+   can overcome it, the strategy logic itself must be replaced. Asking "what number should I change?"
+   is the signal that replacement — not tuning — is needed.
+
+2. **Win rate vs. profit factor balance**: Achieving PF > 1 is meaningful but insufficient.
+   Win rate must exceed the break-even WR (= 1 / (1 + PF)).
+   Example: PF 1.6:1 → break-even WR 38.5% → actual WR 33% → still a loss.
+
+3. **Timeframe selection matters**: The same strategy logic produces very different reliability
+   on 5-minute vs. 15-minute candles. Shorter timeframes have more noise,
+   causing entry signals to become invalidated rapidly.
+
+4. **Value of layered entry structure**: Separating entry conditions into Environment → Direction → Timing
+   makes each layer independently accountable, making it easy to diagnose which layer failed.
+   This transparency is impossible with a single aggregated score approach.
+
+---
+
 ## 2026-02-19: Fixed Take-Profit 도입 및 핵심 버그 수정
 ## 2026-02-19: Introducing Fixed Take-Profit & Critical Bug Fix
 
