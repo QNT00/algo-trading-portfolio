@@ -8,6 +8,487 @@
 
 ---
 
+## 2026-03-04: AggressiveTradingSystem 손실 원인 분석 및 Contrarian(역방향) 모드 전환
+## 2026-03-04: AggressiveTradingSystem Loss Root Cause Analysis & Contrarian Mode Pivot
+
+### 배경 (Background)
+
+KO:
+13일간 실거래 운영 후 유의미한 손실 발생. 봇을 정지하고 102건 전체 거래 로그를 구조적으로 분석.
+단순 파라미터 조정이 아닌 **전략 구조 자체의 근본 원인** 파악을 목표로 함.
+
+EN:
+After 13 days of live operation, the system incurred significant drawdown. Bot was halted and all 102 completed trades were systematically analyzed.
+The goal was to identify the **structural root cause** — not just tune parameters.
+
+---
+
+### 문제 1: K-Means 레짐 분류기의 후행성 (Problem 1: K-Means Regime Classifier Lag)
+
+KO:
+**현상**: AggressiveTradingSystem은 설계 의도상 **역추세(Contrarian)** 전략이었으나,
+실질적으로는 **후행 추세 추종(Lagging Trend-Following)** 전략으로 동작하고 있었음.
+
+**원인 분석**:
+- K-Means 레짐 분류기가 사용하는 특성(ADX, EMA 정렬 등)은 본질적으로 **후행 지표(Lagging Indicators)**
+- `STRONG_DOWNTREND` 레짐 인식 시점 = 하락이 이미 성숙한 시점 → 반등이 임박한 시점에 SHORT 진입
+- `STRONG_UPTREND` 레짐 인식 시점 = 상승이 이미 성숙한 시점 → 조정이 임박한 시점에 LONG 진입
+- 결과: **방향이 구조적으로 틀리는 패턴** 확인 (손절 거래의 80% 이상에서 진입 직후 반대 방향으로 가격 이동)
+
+EN:
+**Symptom**: AggressiveTradingSystem was designed as a **Contrarian** strategy, but was operating in practice as a **Lagging Trend-Following** strategy.
+
+**Root cause analysis**:
+- Features used by K-Means classifier (ADX, EMA alignment, etc.) are inherently **lagging indicators**
+- When `STRONG_DOWNTREND` is recognized = the decline is already mature → SHORT entered just as a bounce is imminent
+- When `STRONG_UPTREND` is recognized = the rally is already mature → LONG entered just as a pullback is imminent
+- Result: **Systematically wrong direction** confirmed (over 80% of stop-loss trades moved against entry immediately)
+
+---
+
+### 문제 2: 고정 익절 미체결 (Problem 2: Fixed TP Never Triggered)
+
+KO:
+**현상**: 102건 전체 거래에서 고정 익절(TP) 체결 건수 = 0건.
+전체 수익 거래는 100% 트레일링 스탑 이탈로 청산.
+
+**분석**:
+- 설정된 R:R 배수에 도달하기 위해 필요한 가격 이동 거리 자체가 과도함
+- 방향이 맞는 경우에도 가격이 TP 라인까지 도달하기 전에 역전되는 패턴 반복
+- "이름만 수익 거래"(트레일링 스탑 이탈)와 "진짜 수익 거래"(TP 체결)를 같은 기준으로 보면 성과 과대평가
+
+EN:
+**Symptom**: Across all 102 completed trades, fixed TP fill count = 0.
+Every winning trade was closed via trailing stop escape — none reached the fixed TP target.
+
+**Analysis**:
+- The required price move to reach the set R:R target was excessive for the system's average hold duration
+- Even when direction was correct, price reversed before reaching the TP line
+- Conflating "trailing stop escapes" (name-only wins) with "fixed TP fills" (real wins) overstates performance
+
+---
+
+### 문제 3: 레짐별 손익 편차 및 밴드에이드 함정 (Problem 3: Regime PnL Bias & Band-Aid Trap)
+
+KO:
+특정 레짐(예: `STRONG_DOWNTREND`)의 성과가 극히 나쁜 것을 발견.
+초기 반응은 "이 레짐만 진입 제한" 이었으나, 이는 **밴드에이드 해법**임을 인식:
+
+- 하락장에서 `STRONG_DOWNTREND` 후행 진입이 문제 → 제한하면 단기 개선
+- 상승장이 오면 `STRONG_UPTREND` 후행 진입이 동일한 문제를 일으킴
+- 특정 레짐 차단은 근본 원인(후행성)을 해결하지 못하고 시장 국면별로 문제가 반복됨
+
+**결론**: 레짐 필터링이 아닌 **신호 방향 자체의 구조적 수정**이 필요.
+
+EN:
+Specific regimes (e.g., `STRONG_DOWNTREND`) showed extremely poor performance.
+Initial reaction was "restrict entry in this regime" — but this was identified as a **band-aid fix**:
+
+- In a bear market, lagging `STRONG_DOWNTREND` entries cause losses → blocking it helps short-term
+- In a bull market, lagging `STRONG_UPTREND` entries will produce the same problem
+- Blocking specific regimes does not solve the root cause (lag); the problem recurs as market conditions change
+
+**Conclusion**: The fix must target the **structural direction bias**, not individual regime filters.
+
+---
+
+### 해결 방법: Contrarian 모드 도입 (Solution: Contrarian Mode Implementation)
+
+KO:
+K-Means 분류기의 후행성을 **결함이 아닌 신호로 재해석**:
+레짐 분류 시점 = 해당 추세가 성숙한 시점 = 반전 임박 시점
+→ 분류기가 생성하는 방향을 반전시키면 역추세 진입이 됨
+
+**구현 방식** (3개 파일 수정):
+1. `signal_generator.py`: 최종 신호 출력 시 `LONG↔SHORT` 반전 로직 추가 (`reverse_signals` 플래그)
+2. `config.py`: `reverse_signals = True` 설정, 검증 기간 레버리지 최소화
+3. `main.py`: 시스템 시작 시 `[CONTRARIAN MODE]` 로그 출력, 각 신호에 `[REVERSED]` 태그 추가
+
+**의도적으로 변경하지 않은 것**:
+- SL 거리 (변경 시 효과 측정이 오염됨)
+- TP 배수 (독립 변수 유지)
+- 진입 임계값 (신호 방향만 검증)
+
+EN:
+Reframed the K-Means classifier's lag as **a signal, not a defect**:
+Regime classification time = the moment that trend is mature = reversal is imminent
+→ Reversing the classifier's output direction produces counter-trend entries
+
+**Implementation** (3 files modified):
+1. `signal_generator.py`: Added `LONG↔SHORT` flip logic at final signal output (`reverse_signals` flag)
+2. `config.py`: Set `reverse_signals = True`, minimized leverage for verification period
+3. `main.py`: Added `[CONTRARIAN MODE]` log at system start, `[REVERSED]` tag on each signal
+
+**Intentionally unchanged**:
+- SL distance (changing it would contaminate the effect measurement)
+- TP multiplier (kept as independent variable)
+- Entry threshold (only entry direction is being validated)
+
+---
+
+### 검증: 6개월 백테스트 (Validation: 6-Month Backtest)
+
+KO:
+Binance Futures 5분봉 7종목 6개월치 데이터를 다운로드, 동일 파라미터에서 원래 방향 vs 반전 방향 비교.
+서버에서 운영 중인 K-Means 모델을 로컬에 복사하여 동일한 레짐 분류 조건 적용.
+
+**결과**:
+- 원래 방향: 7종목 중 다수에서 수익 저조 또는 손실
+- 반전 방향: 7종목 중 6종목에서 개선 확인
+  - 원래 방향에서 손실을 기록하던 종목들이 반전 후 수익으로 전환
+  - 승률 상승 (원래 방향 평균 ~41% → 반전 방향 평균 ~49%)
+  - Profit Factor: 원래 방향에서 1.0 미만이던 종목들이 반전 후 전부 1.0 초과
+  - MDD: 대부분 종목에서 개선
+- 1개 종목(DOGE)에서만 원래 방향이 우세 — 해당 기간 특수성으로 판단
+
+**백테스트 한계**:
+- 슬리피지, 체결 지연, 펀딩비 미반영
+- 과거 6개월 데이터에 대한 사후 검증 — 미래 성과를 보장하지 않음
+- 소액 실전 배포 후 2~4주 추가 검증 필요
+
+EN:
+Downloaded 6 months of 5-minute data for all 7 symbols from Binance Futures.
+Compared original direction vs. reversed direction under identical parameters.
+Used the actual K-Means model running on the server to ensure consistent regime classification.
+
+**Results**:
+- Original direction: majority of symbols showed poor or negative performance
+- Reversed direction: improvement confirmed in 6 of 7 symbols
+  - Symbols that were losing in original direction turned profitable after reversal
+  - Win rate improvement (original ~41% avg → reversed ~49% avg)
+  - Profit Factor: all symbols previously below 1.0 crossed above 1.0 after reversal
+  - MDD: improved in most symbols
+- 1 symbol (DOGE) remained better in original direction — attributed to period-specific price behavior
+
+**Backtest limitations**:
+- Does not account for slippage, fill delays, or funding fees
+- Retrospective validation on past data — does not guarantee future performance
+- Additional live verification required over 2–4 weeks post-deployment
+
+---
+
+### 결과 및 배운 점 (Result & Learnings)
+
+KO:
+1. **후행 지표는 양날의 검**: 레짐 분류기가 후행이라는 것은 약점이 아닐 수 있음.
+   방향을 반전시키면 오히려 반전 시점 포착에 유리한 구조가 됨.
+   핵심은 "이 도구가 무엇을 잘 하는가"를 파악하는 것.
+
+2. **밴드에이드 vs 근본 수정 구분**: 특정 레짐 차단은 데이터에 과적합된 해법.
+   시장 국면이 바뀌면 다른 레짐에서 동일 문제가 반복됨.
+   진짜 수정은 문제의 발생 원리를 바꾸는 것이어야 함.
+
+3. **독립 변수 통제**: 방향만 바꾸고 SL/TP/임계값을 유지함으로써
+   "방향 반전의 효과"를 다른 변수와 혼재 없이 측정 가능.
+   검증 설계에서 독립 변수 통제는 필수.
+
+4. **Exit 유형 분류의 중요성**: 트레일링 스탑 이탈과 고정 TP 체결을 같은 "수익 거래"로 집계하면
+   시스템의 실제 성과가 왜곡됨. 청산 유형별 별도 분석이 진단 정확도를 크게 높임.
+
+EN:
+1. **Lagging indicators are a double-edged sword**: A lagging regime classifier is not necessarily a weakness.
+   Reversing its direction output turns it into a structure that's well-positioned to capture trend reversals.
+   The key insight is understanding *what the tool actually does well*.
+
+2. **Band-aid vs. root fix**: Blocking specific regimes is a data-overfit solution.
+   When market conditions change, the same problem re-emerges in a different regime.
+   A real fix changes the mechanism that causes the problem.
+
+3. **Isolate the independent variable**: By changing only direction while holding SL/TP/thresholds constant,
+   the effect of direction reversal can be measured cleanly without confounding variables.
+   Controlling independent variables is essential in any system validation design.
+
+4. **Exit type classification matters**: Grouping trailing stop escapes and fixed TP fills under the same "winning trade" label
+   distorts the system's true performance picture. Analyzing by exit type significantly improves diagnostic accuracy.
+
+---
+
+## 2026-02-26: 머신러닝 기반 HFT(고빈도 매매) 추론 엔진 및 C++ 실행단 통합 파이프라인 완성
+## 2026-02-26: Machine Learning-Based HFT Inference Engine & C++ Execution Pipeline Integration Complete
+
+### 배경 (Background)
+
+KO:
+C++을 활용한 초저지연(Ultra-Low Latency) 주문 집행 엔진 아키텍처를 앞서 구축하였으나, 
+이를 구동할 "두뇌" 역할을 하는 머신러닝 추론 파이프라인의 실시간 연동이 필요했다.
+단순히 호가창(Orderbook)을 분석하는 것을 넘어, 100ms 단위의 미시적 틱(Tick) 및 체결 데이터를 수집하여 모델을 학습시키고, 
+이를 기반으로 0.1초 이내에 시장 상황을 판단해 C++ 엔진에 동적 비중(Dynamic Sizing)과 타점을 전송하는 완전히 자율화된 HFT 사이클 구조를 완성하고자 하였다.
+
+EN:
+Having previously built an ultra-low latency execution engine in C++, the system needed its "brain" — a real-time machine learning inference pipeline. 
+The overall goal was not just basic orderbook analysis, but to collect micro-tick data at 100ms intervals, train a predictive model, 
+and deploy it to evaluate market micro-structure in under 0.1 seconds. 
+This inference module would then transmit confidence-adjusted dynamic sizing and entry targets directly to the C++ engine, completing a fully autonomous HFT cycle.
+
+---
+
+### 문제: 라이브 틱 데이터 부재 및 머신러닝 추론 병목 (Problem: Lack of Live Tick Data & ML Inference Bottlenecks)
+
+KO:
+1. **고빈도 데이터 수집의 한계**: 거래소의 일반적인 REST API로는 과거의 깊은 호가창(Depth) 데이터를 한 번에 확보할 수 없었다.
+2. **복잡한 뉴럴넷 모델의 지연 속도**: 기존에 사용하던 딥러닝(PyTorch 등) 모델은 추론(Inference)에 수십 밀리초 이상이 소요되어 나노초 단위 경쟁이 필수적인 HFT 환경에서는 병목이 발생했다.
+
+EN:
+1. **Limits of High-Frequency Data Collection**: Standard REST APIs do not provide historical deep orderbook data (Depth) essential for micro-structure analysis.
+2. **Latency of Complex Neural Networks**: The existing deep learning models (PyTorch-based) required tens of milliseconds for inference, creating an unacceptable bottleneck in an HFT environment where nanosecond-level competition is critical.
+
+---
+
+### 해결 방법: HFT 특화 데이터 파이프라인 및 XGBoost 아키텍처 도입 (Solution: HFT-Specific Data Pipeline & XGBoost Architecture)
+
+KO:
+1. **웹소켓 로거 및 아카이브 데이터 병합 채택**: 
+   - 실시간 체결(`@aggTrade`) 및 5단계 호가(`@depth5`) 데이터를 100ms 주기로 로깅하는 전용 콜렉터 데몬 구축.
+   - 단기적인 데이터 부족 문제를 해소하기 위해 과거 바이낸스 일일 틱 아카이브 데이터를 병렬로 비동기 다운로드 및 압축 해제하여 대규모 초기 훈련 데이터셋으로 병합하는 구조 추가 구현.
+2. **초고속 결정 트리(XGBoost) 도입 및 과적합 방지**:
+   - 무거운 뉴럴넷 대신 밀리초 단위 추론이 가능한 XGBoost 채택.
+   - 타겟 레이블(Label)을 단순한 가격 방향이 아닌, 슬리피지와 수수료를 극복 가능한 '틱(Tick) 단위 목표 수익 초과 달성 여부'로 엄격히 재설계.
+   - 금융 데이터의 노이즈 처리 및 과적합(Overfitting) 방지를 위해 트리의 깊이(Depth)를 얕게 제한하고 파라미터 튜닝 적용.
+3. **분리형 아키텍처(Brain-Brawn Separation) 강화**:
+   - Python(두뇌)은 ML 추론과 자금 관리(수량 동적 조절)만 담당하고, 모델이 산출한 예측 확신도(Confidence)에 비례해 동적 수량(Dynamic Quantity)을 명시한 명령을 Shared Memory(IPC)로 C++(심장)에 전송.
+
+EN:
+1. **Websocket Logger & Archive Data Merging**:
+   - Built a dedicated collector daemon logging real-time aggregated trades (`@aggTrade`) and optimal depth (`@depth5`) at 100ms intervals.
+   - To overcome immediate data sparsity, implemented an asynchronous downloader to fetch and merge historical daily tick archives as a bootstrap training set.
+2. **High-Speed Decision Trees (XGBoost) & Overfitting Prevention**:
+   - Replaced heavy neural nets with XGBoost for sub-millisecond inference execution.
+   - Redefined the target label away from simple price direction towards a strict 'Tick-level excess return' threshold to account for slippage and transaction fees.
+   - Restrained tree depth and applied strict parameter tuning to combat noise and prevent overfitting in non-stationary financial data.
+3. **Brain-Brawn Separation Architecture**:
+   - Established an asynchronous hybrid pipeline where Python handles ML inference and dynamic position sizing, securely passing signal confidence and dynamic order quantity via Shared Memory (IPC) to the C++ core for ultra-fast execution.
+
+---
+
+### 결과 및 배운 점 (Result & Learnings)
+
+KO:
+1. **완전한 HFT 사이클 가동**: 수집 $\rightarrow$ 학습 $\rightarrow$ 실시간 추론 $\rightarrow$ IPC 통신 $\rightarrow$ C++ 트레일링 실행으로 이어지는 매매 사이클이 성공적으로 통합 가동됨.
+2. **시스템 무결성과 폴백(Fallback)**: 학습된 객체 파일(.json)이 없을 시 기존 휴리스틱 룰 베이스로 유연하게(Graceful degradation) 동작하는 폴백 모드를 덧붙여 운영 리스크를 완화함.
+3. **학습 데이터 퀄리티의 한계 돌파**: 결국 극초단타 영역에서의 엣지(Edge)는 화려한 전략 알고리즘보다, 얼마나 깊고 넓은 **미시적 거래 데이터(Micro-structure data)를 가공해 낼 수 있는 인프라 엔지니어링** 역량에 압도적으로 의존한다는 결론을 재확인.
+
+EN:
+1. **Full HFT Lifecycle Operable**: Successfully united the entire pipeline: Collection $\rightarrow$ Training $\rightarrow$ Real-time Inference $\rightarrow$ IPC $\rightarrow$ C++ Trailing Execution.
+2. **Loose Coupling & Fallback Integrity**: Secured operational integrity by engineering a fallback mechanism that automatically reverts to a heuristic rule-base if the ML model file is unavailable.
+3. **Supremacy of Data Engineering**: Reaffirmed that within robust HFT architectures, the competitive edge relies almost entirely on the engineering capability to harvest and preprocess massive micro-structure data, validating that infrastructure outranks algorithmic complexity.
+
+---
+
+## 2026-02-23: C++ 고빈도 매매 엔진(HFT Engine) 설계 및 구현
+## 2026-02-23: C++ High-Frequency Trading Engine — Design & Implementation
+
+### 배경 (Background)
+
+KO:
+파이썬 기반 트레이딩 봇은 신호 생성과 학습에는 적합하지만, 실제 주문 집행 단계에서
+GIL(Global Interpreter Lock)과 네트워크 레이턴시가 **수백 밀리초(ms) 단위의 지연**을 만들어
+빠른 시장 변동에 대응하지 못하는 구조적 한계가 있음.
+
+특히 **포지션이 잡힌 이후에도** ML/DL 신호를 실시간으로 수신하여
+주문을 넣었다 뺐다 하며 트레일링 스탑처럼 **큰 이익을 보게**하는 시스템을 목표로,
+**주문 집행 전용 C++20 HFT 엔진**을 밑바닥부터 설계하고 구현.
+
+EN:
+Python-based trading bots are suited for signal generation and ML training, but at the order execution layer,
+GIL (Global Interpreter Lock) and network overhead introduce **hundreds of milliseconds of latency**,
+making them structurally unable to respond to rapid market movements.
+
+The goal was not just fast entry — but also **continuous position optimization after entry**:
+receiving ML/DL signals in real-time and adjusting orders at tick-level speed to extract maximum profit,
+functioning as an extreme trailing stop driven by machine learning.
+To achieve this, a **C++20 HFT execution engine** was designed and implemented from scratch.
+
+---
+
+### 문제: 파이썬 → 거래소 주문 경로의 지연 (Problem: Python → Exchange Order Path Latency)
+
+KO:
+**현상**: 파이썬에서 `ccxt`를 통해 거래소에 주문을 넣는 경우:
+1. Python → HTTP REST 요청 → 거래소 응답: **200~500ms**
+2. 트레일링 스탑 업데이트 주기: **60초 단위 스캔** (그 사이 가격 급변 시 대응 불가)
+3. 시장가 주문(Market Order)이 체결되기까지 추가 슬리피지 발생
+
+**결론**: "언제 사야 하는지"를 아무리 정확하게 알아내도, "주문을 넣는 속도"가 느리면 의미가 없음.
+
+EN:
+**Symptom**: Python's `ccxt`-based order path:
+1. Python → HTTP REST → Exchange Response: **200–500ms**
+2. Trailing stop scan interval: **60-second loops** (unable to react to rapid price moves in between)
+3. Additional slippage on Market Orders before fill
+
+**Conclusion**: No matter how accurate the signal is, slow order execution makes it meaningless.
+
+---
+
+### 해결 방법: 3-Phase C++ HFT 아키텍처 (Solution: 3-Phase C++ HFT Architecture)
+
+KO:
+C++20으로 3단계 구조의 초저지연 엔진 `EngineHFT`를 설계:
+
+**Phase 1 — Python↔C++ 공유 메모리 IPC (`SharedMemReader`)**
+- 파이썬의 ML/DL 신호를 **공유 메모리(Shared Memory)**로 C++에 전달.
+- Boost.Interprocess 기반, Windows(`mmap`) / Linux(`/dev/shm`) / Mac(POSIX) 크로스플랫폼 지원.
+- C++ 측은 **스핀락(Spin-Lock)으로 나노초 단위 폴링**, CPU Core 1에 Thread Affinity 고정.
+- `_mm_pause()` 명령으로 CPU 발열 제어하면서도 지연 시간 최소화 (~10ns 수준).
+
+**Phase 2 — 바이낸스 WebSocket 실시간 스트리밍 (`BinanceWebSocket`)**
+- Boost.Beast + OpenSSL 기반 **비동기(Async) WebSocket** 연결.
+- `btcusdt@trade` 스트림에서 **매 체결 틱(Tick)마다** 가격을 수신.
+- JSON 파싱 없이 **C 문자열 직접 검색**(`std::search`)으로 가격 추출 → 파싱 오버헤드 제거.
+- `TCP_NODELAY` 적용, Core 2에 Thread Affinity 고정.
+- 매 틱마다 `OrderManager::onTick()` 호출 → 트레일링 스탑 나노초 수준 갱신.
+
+**Phase 3 — REST API 즉시 주문 실행 (`BinanceRestClient` + `OrderManager`)**
+- HMAC-SHA256 서명 생성 후 바이낸스 선물 API (`/fapi/v1/order`)에 시장가 주문 발사.
+- `OrderManager`는 **Lock-Free 원자적 상태 관리** (`std::atomic`): IPC 스레드와 WebSocket 스레드 간 경쟁 조건(Race Condition) 제거.
+- 트레일링 스탑 + 고정 익절(TP) + 고정 손절(SL) 로직을 C++ 내부에서 틱 단위로 관리.
+- **포지션 보유 중에도** 파이썬에서 ML/DL 신호가 갱신될 때마다 즉시 스탑/익절 라인을 재조정하여 이익 극대화.
+
+**빌드 시스템**: CMake + vcpkg (Boost, OpenSSL, nlohmann_json)
+
+EN:
+Designed a 3-phase ultra-low-latency engine `EngineHFT` in C++20:
+
+**Phase 1 — Python↔C++ Shared Memory IPC (`SharedMemReader`)**
+- Delivers Python ML/DL signals to C++ via **Shared Memory**.
+- Boost.Interprocess-based, cross-platform: Windows (`mmap`), Linux (`/dev/shm`), Mac (POSIX).
+- C++ side uses **Spin-Lock polling at nanosecond granularity**, pinned to CPU Core 1 with Thread Affinity.
+- `_mm_pause()` instruction controls CPU heat while minimizing latency (~10ns level).
+
+**Phase 2 — Binance WebSocket Real-Time Streaming (`BinanceWebSocket`)**
+- Boost.Beast + OpenSSL **async WebSocket** connection.
+- Receives price on **every trade tick** from `btcusdt@trade` stream.
+- No JSON parsing — **raw C-string search** (`std::search`) extracts price directly → zero parsing overhead.
+- `TCP_NODELAY` enabled, pinned to CPU Core 2 with Thread Affinity.
+- Calls `OrderManager::onTick()` per tick → nanosecond-level trailing stop updates.
+
+**Phase 3 — REST API Instant Order Execution (`BinanceRestClient` + `OrderManager`)**
+- HMAC-SHA256 signature generation → market order fire to Binance Futures API (`/fapi/v1/order`).
+- `OrderManager` uses **Lock-Free atomic state management** (`std::atomic`): eliminates race conditions between IPC thread and WebSocket thread.
+- Trailing stop + fixed TP + fixed SL logic managed per-tick inside C++.
+
+**Build system**: CMake + vcpkg (Boost, OpenSSL, nlohmann_json)
+
+---
+
+### 결과 (Result)
+
+KO:
+- CMake 빌드 성공 (Windows MSVC / C++20)
+- `test_shm.py` ↔ `EngineHFT` 공유 메모리 양방향 통신 검증 완료 (쓰기 지연: ~1µs)
+- WebSocket 실시간 틱 수신 + `OrderManager` 트레일링 스탑 연동 검증 완료
+- REST API 시장가 주문 발사 및 응답 수신 테스트 코드 준비 (테스트넷 키 삽입 시 즉시 실전 가능)
+
+EN:
+- CMake build successful (Windows MSVC / C++20)
+- `test_shm.py` ↔ `EngineHFT` shared memory bidirectional communication verified (write latency: ~1µs)
+- WebSocket real-time tick reception + `OrderManager` trailing stop integration verified
+- REST API market order fire and response reception test code ready (live-ready upon testnet key insertion)
+
+---
+
+### 배운 것 (Learnings) / Learnings
+
+KO:
+1. **Sleep(0)도 느리다**: HFT에서는 `std::this_thread::sleep_for`조차 수십 µs의 커널 스케줄링 지연을 만듦.
+   진정한 초저지연은 `_mm_pause()` + Spin-Lock + Thread Affinity의 조합으로만 달성 가능.
+
+2. **JSON 파싱은 병목이다**: 매 틱마다 `nlohmann::json::parse()`를 호출하면 µs 단위 지연 발생.
+   `std::search`로 `"p":"` 패턴을 직접 찾아 가격을 추출하는 것이 WebSocket 처리 속도의 핵심.
+
+3. **Lock-Free 설계의 중요성**: IPC 스레드(Core 1)와 WebSocket 스레드(Core 2)가 같은 포지션 상태를 공유할 때
+   `std::mutex`는 µs 단위 블로킹을 만듦. `std::atomic` + `memory_order_acquire/release`로 무경합 상태 전환 구현.
+
+4. **크로스플랫폼 공유 메모리**: Windows의 `Named Memory-Mapped File`과 Linux/Mac의 POSIX `shm_open`은
+   Boost.Interprocess로 통합할 수 있지만, 파이썬 측 코드도 OS별 분기가 필요함 (`mmap` vs `multiprocessing.shared_memory`).
+
+EN:
+1. **Even Sleep(0) is too slow**: In HFT, `std::this_thread::sleep_for` introduces tens of µs of kernel scheduling delay.
+   True ultra-low latency requires `_mm_pause()` + Spin-Lock + Thread Affinity combined.
+
+2. **JSON parsing is a bottleneck**: Calling `nlohmann::json::parse()` per tick adds µs-level delay.
+   Using `std::search` to find `"p":"` pattern and extracting price directly is the key to WebSocket processing speed.
+
+3. **Lock-Free design matters**: When IPC thread (Core 1) and WebSocket thread (Core 2) share position state,
+   `std::mutex` creates µs-level blocking. `std::atomic` + `memory_order_acquire/release` enables contention-free state transitions.
+
+4. **Cross-platform shared memory**: Windows `Named Memory-Mapped File` and Linux/Mac POSIX `shm_open`
+   can be unified via Boost.Interprocess, but Python-side code also requires OS-specific branching (`mmap` vs `multiprocessing.shared_memory`).
+
+---
+
+## 2026-02-23: V2 학습 파이프라인 실전 가동 및 독립형 리팩토링
+## 2026-02-23: V2 Training Pipeline Production Run & Standalone Refactoring
+
+### 배경 (Background)
+
+KO:
+2/22에 설계한 V2 아키텍처(HMM + TCN + PPO)를 **실제 15개 코인의 18개월치 데이터**로
+학습시키는 과정.
+
+EN:
+The V2 architecture (HMM + TCN + PPO) designed on 2/22 was trained against **18 months of real data
+across 15 coins**.
+
+
+### 문제 1: 로컬 사양 제한으로 RL 학습 중단 (Problem 1: RL Training Freeze Due to Local Hardware Limits)
+
+KO:
+**현상**: `train_rl_v2.py` 실행 시 RL 에이전트(PPO)가 학습 도중 컴퓨터가 멈추거나 극도로 느려짐.
+
+**원인 분석**:
+- `_get_observation()` 함수가 **매 스텝(10만 번)마다** TCN 딥러닝 추론 + MarketAnalyzer 전체 분석을 호출
+- `n_steps=2048`, `batch_size=512`로 롤아웃 버퍼가 RAM을 과도하게 점유
+- `max_steps=2000`으로 에피소드가 길어 한 에피소드 완료까지 수분 소요
+
+**해결** (환경 파일 수정 없이 `train_rl_v2.py`만 변경):
+- `n_steps`: 2048 → **512** (RAM 1/4 절감)
+- `batch_size`: 512 → **128**
+- `n_epochs`: 10 → **5** (CPU 연산 절반)
+- `max_steps`: 2000 → **1000** (에피소드 길이 단축)
+- `LightweightObsWrapper` 래퍼 추가: 관측값을 `float32`로 강제 변환하여 메모리 누수 방지
+- `gc.collect()` 학습 후 호출: 즉시 메모리 해제
+
+EN:
+**Symptom**: During `train_rl_v2.py` execution, the RL agent (PPO) caused the computer to freeze or become extremely slow.
+
+**Root cause analysis**:
+- `_get_observation()` was calling TCN deep learning inference + full MarketAnalyzer analysis **every step (100K times)**
+- `n_steps=2048`, `batch_size=512` caused rollout buffer to over-consume RAM
+- `max_steps=2000` made each episode take several minutes to complete
+
+**Fix** (modified `train_rl_v2.py` only — no environment file changes):
+- `n_steps`: 2048 → **512** (RAM usage reduced to 1/4)
+- `batch_size`: 512 → **128**
+- `n_epochs`: 10 → **5** (CPU computation halved)
+- `max_steps`: 2000 → **1000** (episode length shortened)
+- Added `LightweightObsWrapper`: forces observations to `float32` to prevent memory leaks
+- `gc.collect()` called post-training for immediate memory release
+
+---
+
+### 배운 것 (Learnings) / Learnings
+
+KO:
+1. **코드 이식성(Portability) 설계**: 상속(`from indicator_cache import IndicatorCache`)은 편리하지만,
+   폴더를 옮기거나 V1 파일 구조가 다른 환경에서는 즉시 깨짐.
+   프로덕션 배포를 고려한다면 **독립형 클래스**가 훨씬 안전.
+
+2. **RL 메모리 버짓**: 강화학습에서 `n_steps × obs_dim × num_envs × float32`가 롤아웃 버퍼 크기를 결정.
+   40차원 관측 + 2048 스텝만으로도 수백 MB를 차지할 수 있음.
+   로컬 사양이 제한적이면 **먼저 n_steps를 줄이는 것**이 가장 효과적인 메모리 절감 수단.
+
+EN:
+1. **Portability by design**: Inheritance (`from indicator_cache import IndicatorCache`) is convenient but
+   breaks immediately when folders move or V1 file structures differ.
+   For production deployment, **standalone classes** are far safer.
+
+2. **RL memory budget**: In reinforcement learning, `n_steps × obs_dim × num_envs × float32` determines rollout buffer size.
+   40-dim observations + 2048 steps can consume hundreds of MBs.
+   For limited local hardware, **reducing n_steps first** is the most effective memory reduction lever.
+
+---
+
 ## 2026-02-22: AdaptiveTradingSystem V2 통합 — 하이브리드 인공지능 트레이딩 봇 구축
 ## 2026-02-22: AdaptiveTradingSystem V2 Integration — Hybrid AI Trading Bot Architecture
 
@@ -52,24 +533,24 @@ V1 rigidly applied hardcoded ratios, creating a one-dimensional risk management 
 KO:
 결정 단위를 3단계로 쪼개고 각각 최적의 AI 방법론을 적용한 통합 파이프라인(`train_all_v2.py`) 설계:
 
-1. **환경 분석**: HMM(Hidden Markov Model) 도입.
-   단순 가격 지표를 40여 개의 파생 변수(Hurst Exponent 등)로 확장하고, 비지도 학습(HMM)과 지도 학습(LightGBM)을 결합하여 현재를 넘어 **미래의 상태 전환 확률(Regime Transition Probability)**을 예측.
-2. **시그널 생성**: CNN 계열의 TCN(Temporal Convolutional Network) 도입.
-   과적합 방지를 위해 인과적 패딩(Causal Padding)을 적용하여 철저히 미래 데이터를 차단하고 확률 분포 기반(Softmax) 신뢰도(Confidence) 반환.
-3. **자금 관리**: 강력한 PPO(Proximal Policy Optimization) 심층 강화학습 에이전트 도입.
-   40차원의 시장 환경을 5차원의 행동 공간(매매 방향, 레버리지, 크기 등)으로 맵핑하여 Sortino Ratio 기반 보상 함수를 극대화하도록 자가 학습.
+1. **환경 분석**: 비지도 학습(Unsupervised)과 지도 학습(Supervised)을 결합한 앙상블 모델 도입.
+   단순 가격 지표를 다수의 파생 변수(시장 미시구조 통계 포함)로 확장하고, 현재를 넘어 **미래의 상태 전환 확률(Regime Transition Probability)**을 예측.
+2. **시그널 생성**: CNN 계열의 시계열 특화 딥러닝 모델 도입.
+   과적합 방지를 위해 인과적 패딩(Causal Padding)을 적용하여 철저히 미래 데이터를 차단하고 확률 분포 기반 신뢰도(Confidence) 반환.
+3. **자금 관리**: 심층 강화학습(Deep RL) 에이전트 도입.
+   다차원 시장 환경을 다차원 행동 공간(매매 방향, 리스크 파라미터 등)으로 맵핑하여 리스크 조정 수익률 기반 보상 함수를 극대화하도록 자가 학습.
 4. **하방 호환성 (Fallback)**:
    V2 딥러닝 컴포넌트 오류 시, 프로그램이 크래시(Crash)되지 않고 기존 안전한 V1(Rule-based) 엔진으로 우회하도록 마이크로서비스 관점의 구조적 안정성을 채택.
 
 EN:
 Divided the decision unit into 3 layers, applying optimal AI methodologies per layer, integrated via `train_all_v2.py`:
 
-1. **Environment Analysis**: Introduced HMM.
-   Expanded features to 40+ structural variables (e.g., Hurst Exponent). Combined Unsupervised (HMM) and Supervised (LightGBM) learning to predict the **Regime Transition Probability** rather than just identifying the current state.
-2. **Signal Generation**: Introduced TCN (Temporal Convolutional Network).
-   Applied Causal Padding strictly to prevent look-ahead bias, outputting probabilistic Confidence via Softmax.
-3. **Capital Management**: Introduced PPO Deep Reinforcement Learning Agent.
-   Mapped a 40-dimensional observation space to a 5-dimensional continuous action space (Direction, Leverage, Size, etc.), self-optimizing a Sortino Ratio-based reward function.
+1. **Environment Analysis**: Combined Unsupervised and Supervised ensemble.
+   Expanded features to a large set of structural variables (including market microstructure statistics) to predict the **Regime Transition Probability** rather than just identifying the current state.
+2. **Signal Generation**: Introduced a CNN-family deep learning model specialized for time series.
+   Applied Causal Padding strictly to prevent look-ahead bias, outputting probabilistic Confidence.
+3. **Capital Management**: Introduced a Deep Reinforcement Learning Agent.
+   Mapped a multi-dimensional observation space to a multi-dimensional continuous action space (Direction, Risk Parameters, etc.), self-optimizing a risk-adjusted reward function.
 4. **Backward Compatibility (Fallback)**:
    Adopted a robust microservice-like architecture: if V2 deep learning components fail to load or error out, the system gracefully falls back to the reliable V1 (Rule-based) engine instead of crashing.
 
@@ -166,32 +647,26 @@ KO:
 **핵심 결정**: 5분봉 추세 추종의 구조적 한계를 인정하고 전략 자체를 교체.
 
 **새 전략**: ABT (Adaptive Breakout-Trend)
-- 타임프레임: 5분봉 → **15분봉** (노이즈 대 신호 비율 개선)
-- 진입 구조: **3-Layer 필터**
-  - Layer 1: 환경 필터 (ADX, 볼린저밴드 폭, 거래량 — 레짐 분류기 독립)
-  - Layer 2: EMA/DI 방향 판단 (필터 역할만, 진입 타이밍 아님)
-  - Layer 3: VBO 돌파 + 눌림목 혼합 트리거
-- R:R 구조: 2.0:1 (이전보다 목표치 낮춤 → 손익분기 승률 33.3%로 하향)
-- 트레일링: Phase 0~3 (초기 수익 구간에서 트레일 없음 → R:R 보장)
+- 타임프레임을 상향 조정하여 노이즈 대 신호 비율 개선
+- 진입 구조: **다단계 필터** (환경 필터 → 방향 판단 → 타이밍 트리거 순차 검증)
+- R:R 구조를 하향 조정하여 손익분기 승률 요구치를 낮춤
+- 다단계 트레일링 스탑: 수익 구간별 차등 적용 (초기 수익 보호 → 후기 수익 극대화)
 
-**VBO 참고 근거**: 이전 Trading Bot 프로젝트에서 VBO 전략 소규모 실거래 성공 경험 있음.
-단, 당시 완성형이 아니었으므로 아이디어만 참고하고 설계는 새로 수행.
+**참고 근거**: 이전 프로젝트에서 유사 전략의 소규모 실거래 성공 경험을 참고하되,
+설계는 완전히 새로 수행.
 
 EN:
-**Core decision**: Acknowledged the structural WR ceiling of 5-min trend following.
+**Core decision**: Acknowledged the structural WR ceiling of short-timeframe trend following.
 Replacing the strategy rather than tuning parameters.
 
 **New strategy**: ABT (Adaptive Breakout-Trend)
-- Timeframe: 5-minute → **15-minute** (better signal-to-noise ratio)
-- Entry structure: **3-Layer filter**
-  - Layer 1: Environment filter (ADX, Bollinger Band width, volume — replaces regime classifier)
-  - Layer 2: EMA/DI direction determination (filter only, not timing signal)
-  - Layer 3: VBO breakout + pullback combined trigger
-- R:R: 2.0:1 (lower target than before → break-even WR reduced to 33.3%)
-- Trailing: Phase 0–3 (no trailing in early profit phase → R:R protection)
+- Upgraded to a higher timeframe for improved signal-to-noise ratio
+- Entry structure: **Multi-layer filter** (Environment → Direction → Timing sequential validation)
+- Adjusted R:R target downward to reduce break-even win rate requirement
+- Multi-phase trailing stop: differentiated by profit stage (early profit protection → late profit maximization)
 
-**VBO rationale**: Prior Trading Bot project demonstrated partial success with VBO strategy in small-scale live trading.
-Not production-ready at the time, but validated the core concept.
+**Rationale**: Referenced partial success from a similar strategy in a prior project's small-scale live trading.
+Design was built entirely from scratch.
 
 ---
 
