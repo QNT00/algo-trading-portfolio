@@ -8,6 +8,133 @@
 
 ---
 
+## 2026-03-06 ~ 2026-03-07: AdaptiveTradingSystem 코인 구성 재설계 및 ML/DL 파이프라인 전면 재학습, 대시보드 양 시스템 연결
+## 2026-03-06 ~ 2026-03-07: AdaptiveTradingSystem Coin Universe Redesign & Full ML/DL Pipeline Retraining, Dashboard Connected to Both Systems
+
+### 배경 (Background)
+
+KO:
+이전 학습에서 이종(異種) 코인을 하나의 모델로 학습시키는 구조적 문제를 인식.
+밈코인과 중량급 알트코인을 단일 HMM + TCN + PPO 파이프라인으로 학습하면 서로 다른 시장 구조가 충돌하여
+어느 그룹에도 최적화되지 못하는 결과가 반복됨.
+
+AggressiveTradingSystem이 이미 밈코인·경량 알트코인 군(群)을 담당하고 있음을 재확인.
+→ 역할 분리 설계로 전환: Adaptive는 **ETH/SOL/ADA/XRP 중량급 알트코인 전용**으로 재정의.
+
+EN:
+Identified a structural problem from previous training: mixing heterogeneous coin profiles in a single model.
+Training meme coins and heavyweight altcoins together under a single HMM + TCN + PPO pipeline causes conflicting market structures, consistently producing suboptimal results for both groups.
+
+Confirmed that AggressiveTradingSystem already covers the meme coin / light altcoin universe.
+→ Transitioned to role separation: Adaptive redefined as **ETH/SOL/ADA/XRP heavyweight altcoins only**.
+
+---
+
+### 문제 1: MAJOR_COINS 배제 방식의 불명확성 (Problem 1: Ambiguity of MAJOR_COINS Exclusion Approach)
+
+KO:
+기존 학습 코드는 전체 코인 목록에서 주요 코인을 **배제(exclude)** 하는 방식으로 학습 대상을 간접 지정했음.
+- 어떤 코인이 학습되는지 코드만 보고 즉시 파악 불가 → 유지보수성 저하
+- data/ 디렉토리에 새 코인이 추가될 때 의도치 않게 학습 대상에 편입될 위험
+- 밈코인과 중량급 알트가 혼재하게 된 근본 원인
+
+EN:
+The existing training code indirectly specified the coin universe by **excluding** major coins from a full list.
+- Impossible to immediately tell from code which coins were being trained — hurts maintainability
+- Risk of unintended coin inclusion whenever a new coin is added to the data/ directory
+- Root cause of the meme/heavyweight mixing problem
+
+---
+
+### 문제 2: 절대 수치 기반 성과 기준의 과적합 유발 (Problem 2: Absolute Performance Criteria Inducing Metric Overfitting)
+
+KO:
+기존 검증 기준(Sharpe > 1.0, WR > 50% 등)은 절대 수치 기반이었음.
+특정 시장 국면(강세장/하락장)에 따라 동일 전략도 기준 충족 여부가 달라지고,
+기준을 맞추기 위해 파라미터를 조정하면 기준 자체에 과적합(Overfitting to the metric)이 발생함.
+
+EN:
+Previous validation criteria (Sharpe > 1.0, WR > 50%, etc.) were absolute-threshold based.
+The same strategy can pass or fail purely based on market period (bull/bear), and tuning parameters to meet the numbers produces overfitting to the metric itself.
+
+---
+
+### 해결 방법 (Solution)
+
+KO:
+**1. TARGET_COINS 명시적 포함 방식으로 전환** (`train_rl_v2.py`, `train_regime_v2.py`, `train_signal_v2.py`):
+- 배제 방식 폐기 → 학습 대상 코인을 코드 상단에 `TARGET_COINS` 집합으로 명시
+- 대상: ETH, SOL, ADA, XRP. data/ 내 다른 코인은 자동으로 무시됨
+
+**2. B&H × 평균 레버리지 상대 벤치마크 도입** (`train_rl_v2.py`):
+- 기준선 = 동기간 Buy & Hold 수익률 × 평균 레버리지 추정값
+- "시장이 나빠서 손실"과 "전략이 나빠서 손실"을 분리하여 평가
+- MDD 기준도 B&H MDD 대비 상대값으로 전환
+
+**3. config.py, risk_manager.py 수정**:
+- symbols: 7종목 → ETH/SOL/ADA/XRP 4종목
+- risk 파라미터: 중량급 알트 특성에 맞게 조정
+- RL 모델 로딩 우선순위: adaptive 전용 → altcoin → 기본 순으로 폴백 체인 추가
+
+**4. 대시보드 양 시스템 연결**:
+- 기존에 구현해 둔 대시보드 프론트엔드/백엔드에 Aggressive(Bybit), Adaptive(Binance) 두 시스템을 동시에 연결
+- 각 시스템 포지션·누적 손익·레짐 분류 결과를 독립 패널로 확인 가능
+
+EN:
+**1. Switched to explicit TARGET_COINS inclusion** (`train_rl_v2.py`, `train_regime_v2.py`, `train_signal_v2.py`):
+- Dropped exclusion approach → explicitly declared target coins as a `TARGET_COINS` set at each script's top
+- Targets: ETH, SOL, ADA, XRP. All other coins in data/ are automatically ignored
+
+**2. Introduced B&H × average leverage relative benchmark** (`train_rl_v2.py`):
+- Baseline = same-period Buy & Hold return × average leverage estimate
+- Separates "market was bad" from "strategy was bad"
+- MDD benchmark similarly converted to relative vs. B&H MDD
+
+**3. config.py, risk_manager.py updates**:
+- symbols: 7 coins → ETH/SOL/ADA/XRP (4 coins)
+- risk parameters: adjusted for heavyweight altcoin characteristics
+- RL model loading: fallback chain — adaptive-specific → altcoin → default
+
+**4. Dashboard connected to both systems**:
+- Connected Aggressive (Bybit) and Adaptive (Binance) to the existing dashboard frontend/backend
+- Independent panels for positions, cumulative P&L, and regime classification per system
+
+---
+
+### 재학습 결과 (Retraining Results)
+
+KO:
+3단계 파이프라인 순차 재학습 완료 (regime → signal → RL).
+TCN 검증 정확도 평균 41.7% (기준선 33.3%, 합격 기준 38% 초과 ✅).
+RL 검증: ADA·ETH·XRP Sharpe 양수·PF 1.0 초과, SOL Sharpe 음수·PF 1.0 미만 (모니터링 필요).
+전체 평균 Sharpe 양수, B&H×레버리지 기준선 대비 전략 누적 수익 초과 ✅.
+
+EN:
+3-stage pipeline retrained sequentially (regime → signal → RL).
+TCN validation accuracy avg 41.7% (baseline 33.3%, pass threshold >38% ✅).
+RL validation: ADA/ETH/XRP positive Sharpe, PF > 1.0. SOL negative Sharpe, PF < 1.0 (requires monitoring).
+Overall average Sharpe positive; strategy cumulative return exceeded B&H × leverage baseline ✅.
+
+---
+
+### 결과 및 배운 점 (Result & Learnings)
+
+KO:
+1. **코인 동질성(Homogeneity)이 ML 성능의 핵심 변수**: 코인 선정 기준 변경만으로 RL 에이전트 평균 Sharpe가 음수에서 양수로 전환됨. 모델 구조·하이퍼파라미터보다 학습 데이터 동질성이 더 강한 영향을 미칠 수 있음.
+
+2. **배제 방식 vs 포함 방식**: 포함 대상을 명시하는 것이 배제 대상을 명시하는 것보다 유지보수성과 의도 명확성 모두에서 우월함. 데이터가 동적으로 추가되는 환경에서 배제 방식은 의도치 않은 학습 대상 포함 위험을 항상 내포함.
+
+3. **메트릭 과적합(Metric Overfitting)**: 절대 기준을 목표로 파라미터를 조정하면 기준은 충족하지만 실전 성과와 무관해질 수 있음. 상대 기준(B&H × 레버리지)은 시장 국면에 무관하게 공정한 비교를 제공함.
+
+EN:
+1. **Coin homogeneity is a primary ML performance variable**: Changing coin selection alone shifted average RL Sharpe from negative to positive. Data homogeneity can outweigh architecture and hyperparameter choices in impact.
+
+2. **Exclusion vs. inclusion approach**: Explicitly declaring what to include is superior in both maintainability and clarity. In environments where data grows dynamically, exclusion-based logic always carries unintended inclusion risk.
+
+3. **Metric overfitting**: Tuning parameters to meet absolute criteria can satisfy the metric while becoming disconnected from live performance. Relative benchmarks (B&H × leverage) provide market-phase-agnostic comparisons that are harder to game.
+
+---
+
 ## 2026-03-04: AggressiveTradingSystem 손실 원인 분석 및 Contrarian(역방향) 모드 전환
 ## 2026-03-04: AggressiveTradingSystem Loss Root Cause Analysis & Contrarian Mode Pivot
 
